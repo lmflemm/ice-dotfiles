@@ -1,3 +1,0 @@
-#!/bin/bash
-
-gsed -i 's/size = 25/size = 95/g' /users/lee/repos/github.com/lmflemm/dotfiles/alacritty.toml
