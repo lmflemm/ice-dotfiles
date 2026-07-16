@@ -6,11 +6,11 @@ set -euo pipefail
 # and no changes to the dotfiles repository itself.
 #
 # Usage:
-#   DOTFILES_DIR="$HOME/path/to/mydotfiles" ./setup.ice-safe
+#   DOTFILES_DIR="$HOME/path/to/ice-dotfiles" ./setup.ice-safe
 #   DRY_RUN=1 ./setup.ice-safe
 #   ALLOW_TPM_NETWORK=1 ./setup.ice-safe   # optional; only after policy approval
 
-DOTFILES_DIR="${DOTFILES_DIR:-$HOME/Repos/github.com/lmflemm/mydotfiles}"
+DOTFILES_DIR="${DOTFILES_DIR:-$HOME/Repos/github.com/lmflemm/ice-dotfiles}"
 XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
 XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
