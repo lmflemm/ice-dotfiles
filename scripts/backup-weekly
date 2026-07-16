@@ -1,0 +1,18 @@
+#!/bin/bash
+
+BACKUPS_DESTINATION="/Volumes/OurStuff/Lee/backups/weekly"
+# format:
+# rsync -a --delete --quiet /path/to/backup /location/of/backup
+
+# stop the script if an error occurs
+set -e
+
+# For Mac Device
+rsync -a --delete --quiet --exclude="{"/Users/lee/.cache/*"}" /Users/lee $BACKUPS_DESTINATION/home
+
+# For Linux device.
+#rsync -a --delete --quiet --exclude="{"/home/lee/.cache/*"}" /home/lee $BACKUPS_DESTINATION/home
+#rsync -a --delete --quiet /etc $BACKUPS_DESTINATION
+
+echo "Made weekly backups on: $(date)" >>/var/log/backup.log
+

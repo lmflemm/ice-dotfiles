@@ -1,0 +1,748 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Cross-platform dotfiles bootstrap for macOS, Linux, and Windows-like shells.
+# v9: adds optional AI tooling install checks, including fabric-ai via Homebrew/Linuxbrew or yay/AUR.
+# Override defaults when needed:
+#   DOTFILES_DIR="$HOME/path/to/mydotfiles" ./setup
+#   BREWFILE="$HOME/path/to/Brewfile" ./setup
+
+DOTFILES_DIR="${DOTFILES_DIR:-$HOME/Repos/github.com/lmflemm/mydotfiles}"
+XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
+BREWFILE="${BREWFILE:-$DOTFILES_DIR/Brewfile}"
+BACKUP_SUFFIX="$(date +%Y%m%d%H%M%S)"
+
+log() { printf '\n==> %s\n' "$*"; }
+info() { printf 'INFO: %s\n' "$*"; }
+warn() { printf 'WARN: %s\n' "$*" >&2; }
+err() { printf 'ERROR: %s\n' "$*" >&2; }
+command_exists() { command -v "$1" >/dev/null 2>&1; }
+
+need_sudo() {
+  if command_exists sudo; then
+    sudo -v
+  else
+    err "sudo is not available. Cannot install system packages."
+    return 1
+  fi
+}
+
+detect_os() {
+  case "$(uname -s)" in
+  Darwin) echo "macos" ;;
+  Linux) echo "linux" ;;
+  MINGW* | MSYS* | CYGWIN*) echo "windows" ;;
+  *) echo "unknown" ;;
+  esac
+}
+
+detect_linux_distro() {
+  if [[ -r /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    echo "${ID:-unknown}"
+  else
+    echo "unknown"
+  fi
+}
+
+create_directories() {
+  local dir
+  for dir in "$@"; do
+    mkdir -p "$dir"
+  done
+}
+
+ensure_base_dirs() {
+  local base_dirs=(
+    "$XDG_CONFIG_HOME"
+    "$XDG_CACHE_HOME"
+    "$XDG_DATA_HOME"
+    "$XDG_STATE_HOME"
+    "$XDG_CACHE_HOME/zsh"
+    "$XDG_STATE_HOME/zsh"
+    "$HOME/.local/bin"
+    "$HOME/Repos"
+    "$HOME/Repos/github.com"
+    "$HOME/Repos/github.com/lmflemm"
+  )
+
+  log "Ensuring base directories exist"
+  create_directories "${base_dirs[@]}"
+}
+
+is_placeholder_file() {
+  local target="$1"
+
+  [[ -f "$target" ]] || return 1
+
+  # Empty files, files created by this bootstrap, and zsh-newuser-install's
+  # comment-only file are safe to replace with managed dotfile symlinks.
+  if [[ ! -s "$target" ]]; then
+    return 0
+  fi
+
+  if grep -Eq 'Created by dotfiles setup bootstrap|zsh-newuser-install' "$target" 2>/dev/null; then
+    return 0
+  fi
+
+  # Comment-only/blank files are treated as placeholders.
+  if ! grep -Ev '^[[:space:]]*($|#)' "$target" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  return 1
+}
+
+is_empty_directory() {
+  local target="$1"
+
+  [[ -d "$target" && ! -L "$target" ]] || return 1
+
+  # Directory is safe to replace only if it is empty.
+  [[ -z "$(find "$target" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]
+}
+
+backup_existing_target() {
+  local target="$1"
+  local backup="$target.backup.$BACKUP_SUFFIX"
+
+  mv "$target" "$backup"
+  warn "Backed up existing file/dir: $target -> $backup"
+}
+
+create_symlink() {
+  local source="$1"
+  local target="$2"
+  local required="${3:-optional}"
+  local full_source="$DOTFILES_DIR/$source"
+
+  if [[ ! -e "$full_source" ]]; then
+    if [[ "$required" == "required" ]]; then
+      err "Required source missing: $full_source"
+      return 1
+    fi
+
+    info "Optional source missing, skipping: $full_source"
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$target")"
+
+  if [[ -L "$target" ]]; then
+    local current_target
+    current_target="$(readlink "$target")"
+    if [[ "$current_target" == "$full_source" ]]; then
+      echo "Already linked: $target"
+      return 0
+    fi
+
+    warn "Replacing existing symlink: $target -> $current_target"
+    unlink "$target"
+  elif [[ -e "$target" ]]; then
+    if is_placeholder_file "$target"; then
+      warn "Replacing placeholder file: $target"
+      rm -f "$target"
+    elif is_empty_directory "$target"; then
+      warn "Replacing empty directory: $target"
+      rmdir "$target"
+    else
+      backup_existing_target "$target"
+    fi
+  fi
+
+  ln -s "$full_source" "$target"
+  echo "Linked: $target -> $full_source"
+}
+
+create_symlinks() {
+  local required="${1:-optional}"
+  shift || true
+
+  local item source target
+  for item in "$@"; do
+    IFS=':' read -r source target <<<"$item"
+    create_symlink "$source" "$target" "$required"
+  done
+}
+
+create_minimal_zsh_file() {
+  local target="$1"
+  local kind="$2"
+
+  if [[ -e "$target" || -L "$target" ]]; then
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$target")"
+
+  case "$kind" in
+  zshenv)
+    cat >"$target" <<EOF2
+# Created by dotfiles setup bootstrap.
+# Replace this with the managed dotfile symlink when available.
+export XDG_CONFIG_HOME="\${XDG_CONFIG_HOME:-\$HOME/.config}"
+export XDG_CACHE_HOME="\${XDG_CACHE_HOME:-\$HOME/.cache}"
+export XDG_DATA_HOME="\${XDG_DATA_HOME:-\$HOME/.local/share}"
+export XDG_STATE_HOME="\${XDG_STATE_HOME:-\$HOME/.local/state}"
+export ZDOTDIR="\${ZDOTDIR:-$DOTFILES_DIR/.config/zsh}"
+EOF2
+    ;;
+  zshrc)
+    cat >"$target" <<'EOF2'
+# Created by dotfiles setup bootstrap.
+# Intentionally minimal to suppress zsh-newuser-install until dotfiles are linked.
+EOF2
+    ;;
+  *)
+    : >"$target"
+    ;;
+  esac
+
+  echo "Created minimal zsh startup file: $target"
+}
+
+ensure_zsh_files() {
+  log "Ensuring zsh startup files exist"
+
+  create_directories \
+    "$XDG_CONFIG_HOME/zsh" \
+    "$XDG_CACHE_HOME/zsh" \
+    "$XDG_STATE_HOME/zsh"
+
+  local required_zsh_items=(
+    ".config/zsh/.zshenv:$HOME/.zshenv"
+    ".config/zsh/.zprofile:$HOME/.zprofile"
+    ".config/zsh/.zshrc:$HOME/.zshrc"
+  )
+
+  create_symlinks required "${required_zsh_items[@]}"
+
+  if [[ -e "$DOTFILES_DIR/.config/zsh/.zlogin" ]]; then
+    create_symlink ".config/zsh/.zlogin" "$HOME/.zlogin" optional
+  else
+    create_minimal_zsh_file "$HOME/.zlogin" "zlogin"
+  fi
+}
+
+install_arch_packages() {
+  if ! command_exists pacman; then
+    warn "pacman not found. Skipping Arch package install."
+    return 0
+  fi
+
+  local packages=(
+    acpi
+    alacritty
+    base
+    base-devel
+    bat
+    btop
+    efibootmgr
+    eza
+    fastfetch
+    fd
+    firefox
+    flatpak
+    fontconfig
+    fzf
+    gcc
+    git
+    github-cli
+    grc
+    hyprland
+    intel-ucode
+    iwd
+    kitty
+    lazygit
+    linux
+    linux-firmware
+    lm_sensors
+    lvm2
+    neovim
+    networkmanager
+    openssh
+    pipewire
+    pipewire-alsa
+    pipewire-jack
+    pipewire-pulse
+    wireplumber
+    perl
+    ripgrep
+    rust
+    cargo
+    sudo
+    starship
+    terminus-font
+    tmux
+    ttf-firacode-nerd
+    ttf-nerd-fonts-symbols-mono
+    unzip
+    vim
+    vivid
+    waybar
+    wl-clipboard
+    wofi
+    xf86-input-libinput
+    zoxide
+    zram-generator
+    zsh
+  )
+
+  local attempts=3
+  local attempt
+
+  log "Installing Arch packages with pacman"
+  need_sudo
+
+  for attempt in $(seq 1 "$attempts"); do
+    info "pacman attempt $attempt of $attempts"
+
+    if sudo pacman -Syy --noconfirm &&
+      sudo pacman -S --needed --noconfirm "${packages[@]}"; then
+      return 0
+    fi
+
+    warn "pacman package install attempt $attempt failed. This is often a transient mirror sync issue."
+
+    if [[ "$attempt" -lt "$attempts" ]]; then
+      info "Retrying pacman install in 5 seconds..."
+      sleep 5
+    fi
+  done
+
+  err "Arch package installation failed after $attempts attempts. Check mirrors/network and rerun."
+  return 1
+}
+
+install_linux_packages() {
+  local distro="$1"
+
+  case "$distro" in
+  arch | endeavouros | manjaro)
+    install_arch_packages
+    ;;
+  debian | ubuntu | linuxmint | pop)
+    warn "Debian/Ubuntu package install is not configured yet. Add apt package logic here later."
+    ;;
+  fedora)
+    warn "Fedora package install is not configured yet. Add dnf package logic here later."
+    ;;
+  *)
+    warn "No Linux package install logic configured for distro: $distro"
+    ;;
+  esac
+}
+
+install_macos_packages() {
+  if ! command_exists brew; then
+    warn "Homebrew is not installed. Install Homebrew first, then rerun this script."
+    return 0
+  fi
+
+  if [[ ! -f "$BREWFILE" ]]; then
+    warn "Brewfile not found at: $BREWFILE"
+    warn "Skipping brew bundle install."
+    return 0
+  fi
+
+  log "Installing macOS packages from Brewfile"
+  brew bundle install --file="$BREWFILE"
+}
+
+install_windows_packages() {
+  warn "Windows detected. Package installation is intentionally not implemented yet."
+  warn "Future options: winget, Chocolatey, or Scoop."
+}
+
+setup_linux_helpers() {
+  mkdir -p "$HOME/.local/bin"
+
+  if [[ ! -e "$HOME/.local/bin/gls" ]] && [[ -x /usr/bin/ls ]]; then
+    ln -sf /usr/bin/ls "$HOME/.local/bin/gls"
+    echo "Linked: $HOME/.local/bin/gls -> /usr/bin/ls"
+  fi
+}
+
+setup_pure_prompt_if_needed() {
+  if ! grep -R "prompt_pure_setup\|pure.zsh" "$DOTFILES_DIR" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if ! command_exists git; then
+    warn "git is not available. Skipping legacy Pure prompt setup."
+    return 0
+  fi
+
+  mkdir -p "$HOME/.zsh/functions"
+
+  if [[ ! -d "$HOME/.zsh/pure" ]]; then
+    log "Downloading legacy Pure prompt module"
+    git clone https://github.com/sindresorhus/pure.git "$HOME/.zsh/pure"
+  fi
+
+  ln -sf "$HOME/.zsh/pure/pure.zsh" "$HOME/.zsh/functions/prompt_pure_setup"
+  ln -sf "$HOME/.zsh/pure/async.zsh" "$HOME/.zsh/functions/async"
+}
+
+copy_brewfile_into_repo_if_needed() {
+  local uploaded_brewfile="/mnt/data/Brewfile"
+
+  if [[ -f "$BREWFILE" ]]; then
+    return 0
+  fi
+
+  if [[ -f "$uploaded_brewfile" && -d "$DOTFILES_DIR" ]]; then
+    log "Copying uploaded Brewfile into dotfiles repo"
+    cp "$uploaded_brewfile" "$BREWFILE"
+  fi
+}
+
+append_block_if_missing() {
+  local file="$1"
+  local marker="$2"
+  local block="$3"
+
+  mkdir -p "$(dirname "$file")"
+  touch "$file"
+
+  if grep -Fq "$marker" "$file" 2>/dev/null; then
+    info "Shell integration already present in: $file"
+    return 0
+  fi
+
+  printf '\n%s\n' "$block" >>"$file"
+  echo "Updated: $file"
+}
+
+ensure_shell_integrations() {
+  local zshenv_file="$DOTFILES_DIR/.config/zsh/.zshenv"
+  local aliases_file="$DOTFILES_DIR/.config/zsh/aliases.zsh"
+
+  log "Ensuring shell integrations"
+
+  if [[ -f "$zshenv_file" ]]; then
+    append_block_if_missing "$zshenv_file" "# >>> cargo environment >>>" '# >>> cargo environment >>>
+# Load Rust/Cargo environment when available.
+if [[ -f "$HOME/.cargo/env" ]]; then
+  source "$HOME/.cargo/env"
+fi
+# <<< cargo environment <<<'
+  else
+    warn "zshenv file not found; skipping Cargo shell integration: $zshenv_file"
+  fi
+
+  if [[ -f "$aliases_file" ]]; then
+    append_block_if_missing "$aliases_file" "# >>> fabric alias >>>" '# >>> fabric alias >>>
+# Homebrew installs the Fabric AI CLI as fabric-ai. Keep fabric as the muscle-memory command.
+if command -v fabric-ai >/dev/null 2>&1; then
+  alias fabric="fabric-ai"
+fi
+# <<< fabric alias <<<'
+  else
+    info "Aliases file not found; skipping Fabric alias integration: $aliases_file"
+  fi
+}
+
+source_cargo_env_if_present() {
+  if [[ -f "$HOME/.cargo/env" ]]; then
+    # shellcheck disable=SC1090
+    source "$HOME/.cargo/env"
+  fi
+}
+
+install_fabric_ai() {
+  log "Checking optional AI tooling: fabric-ai"
+
+  source_cargo_env_if_present
+
+  if command_exists fabric-ai; then
+    info "fabric-ai already installed: $(command -v fabric-ai)"
+    return 0
+  fi
+
+  # macOS Homebrew and Linuxbrew both expose the same `brew` command.
+  if command_exists brew; then
+    info "Installing fabric-ai via Homebrew/Linuxbrew"
+    if brew install fabric-ai; then
+      return 0
+    fi
+
+    warn "Homebrew/Linuxbrew fabric-ai install failed. Continuing because AI tooling is optional."
+    return 0
+  fi
+
+  # Daniel Miessler's Fabric is not the official Arch `fabric` package.
+  # The Arch package named `fabric` is the Python SSH/sysadmin tool.
+  # On Arch, Daniel Miessler's Fabric is typically installed from AUR as `fabric-ai`.
+  if command_exists yay; then
+    info "Installing fabric-ai via AUR helper: yay"
+    if yay -S --needed --noconfirm fabric-ai; then
+      return 0
+    fi
+
+    warn "AUR fabric-ai install failed. Continuing because AI tooling is optional."
+    return 0
+  fi
+
+  info "fabric-ai is optional and was not installed because neither brew nor yay is available."
+  info "Do not install pacman package 'fabric' for this purpose; that is the Python SSH Fabric project, not Daniel Miessler's Fabric."
+}
+
+install_ai_tooling() {
+  log "Installing optional AI tooling when supported"
+  install_fabric_ai
+}
+
+ensure_fabric_alias() {
+  log "Ensuring Fabric CLI compatibility"
+
+  mkdir -p "$HOME/.local/bin"
+  source_cargo_env_if_present
+
+  if command_exists fabric-ai; then
+    ln -sf "$(command -v fabric-ai)" "$HOME/.local/bin/fabric"
+    echo "Linked: $HOME/.local/bin/fabric -> $(command -v fabric-ai)"
+    return 0
+  fi
+
+  if command_exists fabric; then
+    info "fabric already available: $(command -v fabric)"
+    return 0
+  fi
+
+  info "fabric-ai is not installed; skipping fabric shim. Install fabric-ai with Homebrew/Linuxbrew or yay, then rerun setup if you want the fabric command."
+}
+
+ensure_theme_runtime() {
+  log "Ensuring prompt/theme runtime directories"
+
+  create_directories \
+    "$XDG_CONFIG_HOME/tmux" \
+    "$XDG_CONFIG_HOME/zsh" \
+    "$XDG_CONFIG_HOME/waybar" \
+    "$XDG_CONFIG_HOME/hypr" \
+    "$XDG_CACHE_HOME/zsh" \
+    "$XDG_STATE_HOME/zsh"
+
+  if command_exists vivid; then
+    if ! vivid themes >/dev/null 2>&1; then
+      warn "vivid is installed, but its themes are not available. LS_COLORS may not generate correctly."
+    fi
+  else
+    info "vivid is not installed yet. LS_COLORS validation skipped."
+  fi
+
+  if command_exists starship; then
+    if [[ -n "${ZDOTDIR:-}" && -f "$ZDOTDIR/starship.toml" ]]; then
+      export STARSHIP_CONFIG="${STARSHIP_CONFIG:-$ZDOTDIR/starship.toml}"
+    elif [[ -f "$XDG_CONFIG_HOME/zsh/starship.toml" ]]; then
+      export STARSHIP_CONFIG="${STARSHIP_CONFIG:-$XDG_CONFIG_HOME/zsh/starship.toml}"
+    fi
+
+    if ! starship explain >/dev/null 2>&1; then
+      warn "starship is installed, but it did not render cleanly during validation."
+    fi
+  else
+    info "starship is not installed yet. Prompt validation skipped."
+  fi
+}
+
+ensure_user_fonts() {
+  local source_dir="$DOTFILES_DIR/.config/fonts"
+  local target_dir="$XDG_DATA_HOME/fonts"
+  local linked_dir="$target_dir/dotfiles"
+
+  if [[ ! -d "$source_dir" ]]; then
+    info "Optional font source missing, skipping: $source_dir"
+    return 0
+  fi
+
+  log "Installing user fonts"
+  mkdir -p "$target_dir"
+
+  if [[ -L "$linked_dir" ]]; then
+    local current_target
+    current_target="$(readlink "$linked_dir")"
+    if [[ "$current_target" == "$source_dir" ]]; then
+      echo "Already linked: $linked_dir"
+    else
+      warn "Replacing existing font symlink: $linked_dir -> $current_target"
+      unlink "$linked_dir"
+      ln -s "$source_dir" "$linked_dir"
+      echo "Linked: $linked_dir -> $source_dir"
+    fi
+  elif [[ -e "$linked_dir" ]]; then
+    backup_existing_target "$linked_dir"
+    ln -s "$source_dir" "$linked_dir"
+    echo "Linked: $linked_dir -> $source_dir"
+  else
+    ln -s "$source_dir" "$linked_dir"
+    echo "Linked: $linked_dir -> $source_dir"
+  fi
+
+  if command_exists fc-cache; then
+    log "Refreshing font cache"
+    fc-cache -fv "$target_dir" >/dev/null || warn "font cache refresh returned a non-zero exit code."
+  else
+    info "fc-cache is not available. Install fontconfig to refresh the font cache."
+  fi
+}
+
+ensure_tmux_plugins() {
+  local tpm_dir="$HOME/.tmux/plugins/tpm"
+
+  if ! command_exists tmux; then
+    info "tmux is not installed yet. Skipping tmux plugin setup."
+    return 0
+  fi
+
+  if ! command_exists git; then
+    warn "git is not installed. Skipping tmux plugin setup."
+    return 0
+  fi
+
+  if [[ ! -d "$tpm_dir" ]]; then
+    log "Installing tmux plugin manager"
+    git clone https://github.com/tmux-plugins/tpm "$tpm_dir"
+  else
+    echo "tmux plugin manager already present: $tpm_dir"
+  fi
+
+  if [[ -x "$tpm_dir/bin/install_plugins" ]]; then
+    log "Installing tmux plugins"
+    "$tpm_dir/bin/install_plugins" || warn "tmux plugin installation returned a non-zero exit code."
+  else
+    warn "TPM install script not found or not executable: $tpm_dir/bin/install_plugins"
+  fi
+}
+
+link_common_dotfiles() {
+  local required_common_items=(
+    ".config/zsh/starship.toml:$XDG_CONFIG_HOME/zsh/starship.toml"
+    ".config/tmux:$XDG_CONFIG_HOME/tmux"
+  )
+
+  local optional_common_items=(
+    ".config/alacritty/alacritty.toml:$XDG_CONFIG_HOME/alacritty/alacritty.toml"
+    ".config/btop/btop.conf:$XDG_CONFIG_HOME/btop/btop.conf"
+    ".config/lazygit/config.yml:$XDG_CONFIG_HOME/lazygit/config.yml"
+    ".config/nvim:$XDG_CONFIG_HOME/nvim"
+    ".config/opencode:$XDG_CONFIG_HOME/opencode"
+    ".inputrc:$HOME/.inputrc"
+  )
+
+  create_symlinks required "${required_common_items[@]}"
+  create_symlinks optional "${optional_common_items[@]}"
+}
+
+link_linux_dotfiles() {
+  local required_linux_items=(
+    ".config/hypr/hyprland.conf:$XDG_CONFIG_HOME/hypr/hyprland.conf"
+    ".config/waybar/config.jsonc:$XDG_CONFIG_HOME/waybar/config.jsonc"
+    ".config/waybar/style.css:$XDG_CONFIG_HOME/waybar/style.css"
+  )
+
+  local optional_linux_items=(
+    ".config/hypr/hypridle.conf:$XDG_CONFIG_HOME/hypr/hypridle.conf"
+    ".config/hypr/hyprlock.conf:$XDG_CONFIG_HOME/hypr/hyprlock.conf"
+    ".config/qutebrowser/config.py:$XDG_CONFIG_HOME/qutebrowser/config.py"
+    ".config/xdg-desktop-portal/portals.conf:$XDG_CONFIG_HOME/xdg-desktop-portal/portals.conf"
+    ".config/pavucontrol.ini:$XDG_CONFIG_HOME/pavucontrol.ini"
+  )
+
+  create_symlinks required "${required_linux_items[@]}"
+  create_symlinks optional "${optional_linux_items[@]}"
+}
+
+link_macos_dotfiles() {
+  local optional_macos_items=(
+    ".config/alacritty/alacritty.toml:$XDG_CONFIG_HOME/alacritty/alacritty.toml"
+  )
+
+  create_symlinks optional "${optional_macos_items[@]}"
+}
+
+main() {
+  local os distro
+  os="$(detect_os)"
+  distro="unknown"
+
+  log "Detected OS: $os"
+  log "Dotfiles directory: $DOTFILES_DIR"
+  log "XDG_CONFIG_HOME: $XDG_CONFIG_HOME"
+
+  if [[ ! -d "$DOTFILES_DIR" ]]; then
+    err "Dotfiles directory does not exist: $DOTFILES_DIR"
+    exit 1
+  fi
+
+  ensure_base_dirs
+  ensure_zsh_files
+  ensure_shell_integrations
+
+  local common_directories=(
+    "$XDG_CONFIG_HOME/alacritty"
+    "$XDG_CONFIG_HOME/alacritty/themes"
+    "$XDG_CONFIG_HOME/btop"
+    "$XDG_CONFIG_HOME/fabric"
+    "$XDG_CONFIG_HOME/git"
+    "$XDG_CONFIG_HOME/iterm2"
+    "$XDG_CONFIG_HOME/lazygit"
+    "$XDG_CONFIG_HOME/mozilla"
+    "$XDG_CONFIG_HOME/nvim"
+    "$XDG_CONFIG_HOME/opencode"
+    "$XDG_CONFIG_HOME/zsh"
+  )
+
+  local linux_directories=(
+    "$XDG_CONFIG_HOME/dconf"
+    "$XDG_CONFIG_HOME/gtk-3.0"
+    "$XDG_CONFIG_HOME/hypr"
+    "$XDG_CONFIG_HOME/pulse"
+    "$XDG_CONFIG_HOME/qutebrowser"
+    "$XDG_CONFIG_HOME/systemd"
+    "$XDG_CONFIG_HOME/waybar"
+    "$XDG_CONFIG_HOME/xdg-desktop-portal"
+  )
+
+  create_directories "${common_directories[@]}"
+  link_common_dotfiles
+  setup_pure_prompt_if_needed
+
+  case "$os" in
+  macos)
+    copy_brewfile_into_repo_if_needed
+    link_macos_dotfiles
+    install_macos_packages
+    ;;
+  linux)
+    distro="$(detect_linux_distro)"
+    log "Detected Linux distro: $distro"
+    create_directories "${linux_directories[@]}"
+    link_linux_dotfiles
+    setup_linux_helpers
+    install_linux_packages "$distro"
+    ;;
+  windows)
+    install_windows_packages
+    ;;
+  *)
+    err "Unsupported OS: $os"
+    exit 1
+    ;;
+  esac
+
+  install_ai_tooling
+  ensure_fabric_alias
+  ensure_user_fonts
+  ensure_theme_runtime
+  ensure_tmux_plugins
+
+  log "Setup complete"
+}
+
+main "$@"

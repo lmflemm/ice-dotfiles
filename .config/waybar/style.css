@@ -1,0 +1,156 @@
+/* Define Gruvbox Material Dark Colors */ 
+@define-color bg_dark     #282828; /* Background */
+@define-color bg_status   #32302f; /* Darker accent block background */ 
+@define-color fg_light    #d4be98; /* Softer cream foreground text */
+@define-color gray        #928374; /* Muted gray for hidden elements */
+
+/* Material Accents */
+@define-color red         #ea6962;
+@define-color orange      #e78a4e;
+@define-color yellow      #d8a657;
+@define-color green       #a9b665;
+@define-color aqua        #89b482;
+@define-color blue        #7daea3;
+@define-color purple      #d3869b;
+
+* {
+    /* `otf-font-awesome` is required to be installed for icons */
+    border: none;
+    font-family: "FiraCode Nerd Font", "Font Awesome", sans-serif;
+    font-size: 11px;
+}
+
+window#waybar {
+    background-color: @bg_dark;
+    border-bottom: 2px solid @bg_status;
+    color: @fg_light;
+    transition-property: background-color;
+    transition-duration: .5s;
+    /* Create the rounded floating dock effect */ 
+    /*
+    border: 2px solid @bg_status;
+    border-radius: 12px;
+    */
+}
+
+window#waybar.hidden {
+    opacity: 0.2;
+}
+
+button {
+    /* Use box-shadow instead of border so the text isn't offset */
+    box-shadow: inset 0 -3px transparent;
+    /* Avoid rounded borders under each button name */
+    border: none;
+    border-radius: 0;
+}
+
+/* https://github.com/Alexays/Waybar/wiki/FAQ#the-workspace-buttons-have-a-strange-hover-effect */
+button:hover {
+    background: inherit;
+    box-shadow: inset 0 -3px #ffffff;
+    background-color: @bg_status;
+}
+
+/* you can set a style on hover for any module like this */
+#pulseaudio:hover {
+    background-color: @bg_status;
+}
+
+#workspaces button {
+    padding: 0 8px;
+    background: transparent;
+    color: @gray;
+}
+
+#workspaces button:hover {
+    background: @bg_status;
+    color: @fg_light;
+}
+
+#workspaces button.focused, #workspaces button.active {
+    background-color: @aqua;
+    color: @bg_dark;
+    font-weight: bold;
+}
+
+#workspaces button.urgent {
+    background-color: @red;
+    color: @bg_dark;
+}
+
+#mode {
+    background-color: #64727D;
+    box-shadow: inset 0 -3px #ffffff;
+}
+
+#clock,
+#battery,
+#cpu,
+#memory,
+#disk,
+#temperature,
+#backlight,
+#network,
+#pulseaudio,
+#wireplumber,
+#custom-media,
+#tray,
+#mode,
+#language,
+#keyboard-state,
+#privacy,
+#privacy-item,
+#idle_inhibitor,
+#scratchpad,
+#power-profiles-daemon,
+#mpd {
+    padding: 0 5px;
+    margin: 3px 1px;
+    background-color: @bg_status;
+    color: @fg_light;
+    border-radius: 4px;
+}
+
+#window,
+#workspaces {
+    color: @yellow;
+    padding: 0 10px;
+}
+
+/* If workspaces is the leftmost module, omit left margin */
+.modules-left > widget:first-child > #workspaces {
+    margin-left: 0;
+}
+
+/* If workspaces is the rightmost module, omit right margin */
+.modules-right > widget:last-child > #workspaces {
+    margin-right: 0;
+}
+
+#clock {
+    color: @blue;
+}
+
+#battery.charging, #battery.plugged {
+    color: @green;
+}
+
+#battery.critical:not(.charging) {
+    background-color: @red;
+    color: @bg_dark;
+    animation-name: blink;
+    animation-duration: 0.5s;
+    animation-timing-function: steps(12);
+    animation-iteration-count: infinite;
+    animation-direction: alternate;
+}
+
+label:focus {
+    background-color: @bg_status;
+}
+
+#keyboard-state label {
+    padding-right: 6px;  /* pushes the text away from the icon */
+}
+

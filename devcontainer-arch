@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONTAINER_NAME="${CONTAINER_NAME:-dotfiles-arch-test}"
+IMAGE="${IMAGE:-archlinux:latest}"
+USER_NAME="${USER_NAME:-lee}"
+GITUSER="${GITUSER:-lmflemm}"
+REPO_NAME="${REPO_NAME:-mydotfiles}"
+REPO_PATH="${REPO_PATH:-$PWD}"
+CONTAINER_REPO_PATH="/home/$USER_NAME/Repos/github.com/$GITUSER/$REPO_NAME"
+
+host_os="$(uname -s)"
+
+if [[ "$host_os" == "Darwin" ]]; then
+  if command -v colima >/dev/null 2>&1; then
+    echo "==> Starting Colima"
+    colima start
+  fi
+fi
+
+echo "==> Checking Docker"
+docker info >/dev/null
+
+echo "==> Starting Arch dev container: $CONTAINER_NAME"
+
+docker run --rm -it \
+  --name "$CONTAINER_NAME" \
+  -v "$REPO_PATH:$CONTAINER_REPO_PATH" \
+  "$IMAGE" \
+  bash -lc "
+    set -e
+
+    pacman -Syu --noconfirm sudo git bash zsh
+
+    if ! id '$USER_NAME' >/dev/null 2>&1; then
+      useradd -m -s /bin/zsh '$USER_NAME'
+    fi
+
+    echo '$USER_NAME ALL=(ALL) NOPASSWD: ALL' >/etc/sudoers.d/$USER_NAME
+    chmod 440 /etc/sudoers.d/$USER_NAME
+
+    chown -R '$USER_NAME:$USER_NAME' /home/$USER_NAME
+
+    su - '$USER_NAME' -c '
+      cd \"$CONTAINER_REPO_PATH\"
+      chmod +x setup
+      exec zsh
+    '
+  "

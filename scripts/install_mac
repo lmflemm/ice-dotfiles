@@ -1,0 +1,87 @@
+#!/bin/bash
+
+# author : Saliha
+# date: 2022-01-14
+# version: 1.0
+# description: install_mac.sh
+
+function install_brew() {
+    if ! command -v brew >/dev/null 2>&1; then
+        echo "Installing homebrew... 🔥🔥🔥"
+        /usr/bin/ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)"
+    fi
+}
+
+function install_vscode() {
+    echo "Installing vscode... 🔥🔥🔥"
+    curl -# -L https://update.code.visualstudio.com/1.63.2/darwin/stable -o VSCode-darwin-universal.zip
+    app_name=$(ls -1 | grep -E 'Visual Studio Code|Code' | head -n 1) 
+    unzip -o "$app_name" -d "/Applications"
+    rm -f "$app_name"
+    echo $(which code)
+}
+    
+function install_docker() {
+    echo "Installing docker ver=20.10.6... 🔥🔥🔥"
+    brew install docker
+    echo "docker version: $(docker --version)"
+    echo "Installing docker-compose ver=1.29.2... 🔥🔥🔥"
+    sudo curl -# -L https://github.com/docker/compose/releases/download/1.29.2/docker-compose-`uname -s`-`uname -m` -o /usr/local/bin/docker-compose
+    sudo chmod +x /usr/local/bin/docker-compose
+    echo "docker compose version: $(docker-compose --version)"
+}
+
+function install_node() {
+    echo "Installing node... 🔥🔥🔥"
+    brew install node
+    echo "node version: $(node --version)"
+    echo "Installing npm... 🔥🔥🔥"
+    brew install npm
+    echo "npm version: $(npm --version)"
+}
+
+function install_python3() {
+    echo "Installing python3... 🔥🔥🔥"
+    brew install python3
+    #  set PATH 
+    echo "PATH=$PATH:/usr/local/bin" >> ~/.bash_profile
+    source ~/.bash_profile
+    echo "python3 version: $(python3 --version)"
+    echo "Installing pip3... 🔥🔥🔥"
+    sudo easy_install3 pip
+    echo "pip3 version: $(pip3 --version)"
+}
+
+################ MAIN ###################
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    echo "Following packages will be installed: brew | vscode(1.63.2) | docker(stable)| docker-compose(1.29.2) | node | npm| python3 | pip3"
+    if [ -f /usr/local/bin/docker ]; then
+    echo "docker already installed : ✅"
+    else
+        install_brew
+        install_docker
+    fi
+
+    if [ -f /usr/local/bin/node ]; then
+    echo "node already installed : ✅"
+    else
+        install_node
+    fi
+
+    if [ -f /usr/local/bin/python3 ]; then
+        echo "python3 already installed : ✅"
+    else
+        install_python3
+    fi
+
+    if [ -f /usr/local/bin/code ]; then
+        echo "VSCode already installed : ✅"
+    else
+        install_vscode
+    fi
+    echo "All done! 👏👏👏"
+else
+   echo "unable find the osname : ❌"
+   exit 8
+fi
+exit 0

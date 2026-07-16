@@ -1,0 +1,9 @@
+# Save this as .mise.toml in your primary project workspace directories
+[tools]
+terraform = "1.8.0"
+python = "3.11"
+node = "20.11.0"
+
+[env]
+JFROG_CLI_LOG_LEVEL = "INFO"
+

@@ -1,0 +1,272 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ICE/work-managed macOS dotfiles bootstrap.
+# Safe-by-default: no sudo, no package installation, no network access,
+# and no changes to the dotfiles repository itself.
+#
+# Usage:
+#   DOTFILES_DIR="$HOME/path/to/mydotfiles" ./setup.ice-safe
+#   DRY_RUN=1 ./setup.ice-safe
+#   ALLOW_TPM_NETWORK=1 ./setup.ice-safe   # optional; only after policy approval
+
+DOTFILES_DIR="${DOTFILES_DIR:-$HOME/Repos/github.com/lmflemm/mydotfiles}"
+XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
+DRY_RUN="${DRY_RUN:-0}"
+ALLOW_TPM_NETWORK="${ALLOW_TPM_NETWORK:-0}"
+BACKUP_SUFFIX="$(date +%Y%m%d%H%M%S)"
+
+log() { printf '\n==> %s\n' "$*"; }
+info() { printf 'INFO: %s\n' "$*"; }
+warn() { printf 'WARN: %s\n' "$*" >&2; }
+err() { printf 'ERROR: %s\n' "$*" >&2; }
+command_exists() { command -v "$1" >/dev/null 2>&1; }
+
+run() {
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf 'DRY-RUN:'
+    printf ' %q' "$@"
+    printf '\n'
+  else
+    "$@"
+  fi
+}
+
+ensure_not_root() {
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    err "Do not run this script as root or with sudo."
+    exit 1
+  fi
+}
+
+ensure_macos() {
+  if [[ "$(uname -s)" != "Darwin" ]]; then
+    err "This work-safe profile is intended for macOS only."
+    exit 1
+  fi
+}
+
+ensure_repo() {
+  if [[ ! -d "$DOTFILES_DIR" ]]; then
+    err "Dotfiles directory does not exist: $DOTFILES_DIR"
+    err "Clone or copy the approved, pared-down repository first."
+    exit 1
+  fi
+}
+
+ensure_base_dirs() {
+  log "Ensuring user-owned XDG directories exist"
+  local dirs=(
+    "$XDG_CONFIG_HOME"
+    "$XDG_CACHE_HOME"
+    "$XDG_DATA_HOME"
+    "$XDG_STATE_HOME"
+    "$XDG_CACHE_HOME/zsh"
+    "$XDG_STATE_HOME/zsh"
+    "$HOME/.local/bin"
+  )
+
+  local dir
+  for dir in "${dirs[@]}"; do
+    run mkdir -p "$dir"
+  done
+}
+
+is_placeholder_file() {
+  local target="$1"
+  [[ -f "$target" ]] || return 1
+  [[ ! -s "$target" ]] && return 0
+  grep -Eq 'Created by dotfiles setup bootstrap|zsh-newuser-install' "$target" 2>/dev/null && return 0
+  ! grep -Ev '^[[:space:]]*($|#)' "$target" >/dev/null 2>&1
+}
+
+backup_target() {
+  local target="$1"
+  local backup="$target.backup.$BACKUP_SUFFIX"
+  run mv "$target" "$backup"
+  warn "Backed up existing target: $target -> $backup"
+}
+
+link_item() {
+  local source_rel="$1"
+  local target="$2"
+  local required="${3:-optional}"
+  local source="$DOTFILES_DIR/$source_rel"
+
+  if [[ ! -e "$source" ]]; then
+    if [[ "$required" == "required" ]]; then
+      err "Required source missing: $source"
+      return 1
+    fi
+    info "Optional source missing, skipping: $source"
+    return 0
+  fi
+
+  run mkdir -p "$(dirname "$target")"
+
+  if [[ -L "$target" ]]; then
+    local current
+    current="$(readlink "$target")"
+    if [[ "$current" == "$source" ]]; then
+      info "Already linked: $target"
+      return 0
+    fi
+    warn "Replacing existing symlink: $target -> $current"
+    run unlink "$target"
+  elif [[ -e "$target" ]]; then
+    if is_placeholder_file "$target"; then
+      warn "Replacing placeholder file: $target"
+      run rm -f "$target"
+    else
+      backup_target "$target"
+    fi
+  fi
+
+  run ln -s "$source" "$target"
+  info "Linked: $target -> $source"
+}
+
+link_shell_config() {
+  log "Linking zsh and Starship configuration"
+
+  link_item ".config/zsh/.zshenv" "$HOME/.zshenv" required
+  link_item ".config/zsh/.zprofile" "$HOME/.zprofile" required
+  link_item ".config/zsh/.zshrc" "$HOME/.zshrc" required
+  link_item ".config/zsh/starship.toml" "$XDG_CONFIG_HOME/zsh/starship.toml" required
+
+  local optional_zsh=(aliases.zsh bindings.zsh fzf.zsh plugins.zsh prompt.zsh)
+  local file
+  for file in "${optional_zsh[@]}"; do
+    if [[ ! -e "$DOTFILES_DIR/.config/zsh/$file" ]]; then
+      warn "Referenced zsh module is missing: $DOTFILES_DIR/.config/zsh/$file"
+    fi
+  done
+}
+
+link_terminal_config() {
+  log "Linking approved user-level application configuration"
+
+  # These are user-owned configurations and do not require sudo.
+  link_item ".config/nvim" "$XDG_CONFIG_HOME/nvim" optional
+  link_item ".config/tmux" "$XDG_CONFIG_HOME/tmux" optional
+  link_item ".config/btop/btop.conf" "$XDG_CONFIG_HOME/btop/btop.conf" optional
+  link_item ".config/lazygit/config.yml" "$XDG_CONFIG_HOME/lazygit/config.yml" optional
+
+  # Alacritty is optional and unrelated to iTerm2, but retained for portability.
+  link_item ".config/alacritty/alacritty.toml" "$XDG_CONFIG_HOME/alacritty/alacritty.toml" optional
+}
+
+validate_tool() {
+  local tool="$1"
+  local purpose="$2"
+
+  if command_exists "$tool"; then
+    info "$tool available: $(command -v "$tool")"
+  else
+    info "$tool not installed ($purpose). Use only an ICE-approved installation path."
+  fi
+}
+
+validate_tools() {
+  log "Validating available tools without installing anything"
+
+  validate_tool zsh "interactive shell"
+  validate_tool starship "prompt theme"
+  validate_tool tmux "terminal multiplexer"
+  validate_tool nvim "editor"
+  validate_tool git "source control"
+  validate_tool gh "GitHub CLI"
+  validate_tool docker "containers"
+  validate_tool vivid "Gruvbox LS_COLORS generation"
+  validate_tool fzf "fuzzy finding"
+  validate_tool zoxide "directory navigation"
+  validate_tool eza "enhanced directory listing"
+  validate_tool bat "syntax-highlighted file viewing"
+}
+
+validate_starship() {
+  if ! command_exists starship; then
+    return 0
+  fi
+
+  local config="$DOTFILES_DIR/.config/zsh/starship.toml"
+  if [[ -f "$config" ]]; then
+    if STARSHIP_CONFIG="$config" starship explain >/dev/null 2>&1; then
+      info "Starship configuration validated successfully."
+    else
+      warn "Starship is installed, but the configuration did not validate cleanly."
+    fi
+  fi
+}
+
+setup_tmux_plugins() {
+  local tpm_dir="$HOME/.tmux/plugins/tpm"
+
+  if ! command_exists tmux; then
+    info "tmux is absent; configuration was linked, but plugins were not installed."
+    return 0
+  fi
+
+  if [[ "$ALLOW_TPM_NETWORK" != "1" ]]; then
+    info "TPM network installation disabled. Set ALLOW_TPM_NETWORK=1 only after confirming policy approval."
+    return 0
+  fi
+
+  if ! command_exists git; then
+    warn "git is unavailable; cannot retrieve TPM."
+    return 0
+  fi
+
+  if [[ ! -d "$tpm_dir" ]]; then
+    log "Cloning TPM from GitHub"
+    run mkdir -p "$(dirname "$tpm_dir")"
+    run git clone https://github.com/tmux-plugins/tpm "$tpm_dir"
+  fi
+
+  if [[ "$DRY_RUN" != "1" && -x "$tpm_dir/bin/install_plugins" ]]; then
+    "$tpm_dir/bin/install_plugins" || warn "One or more optional tmux plugins failed to install."
+  fi
+}
+
+print_next_steps() {
+  log "Work-safe terminal setup complete"
+  cat <<'MSG'
+
+No sudo commands, package installations, or network downloads were performed.
+Restart the shell to load the linked zsh environment:
+
+  exec zsh
+
+Then verify:
+
+  echo "$XDG_CONFIG_HOME"
+  echo "$ZDOTDIR"
+  echo "$STARSHIP_CONFIG"
+  starship --version
+
+If tmux is missing, use only an ICE-approved source such as the company self-service catalog
+or an explicitly permitted Homebrew package. Do not bypass endpoint controls.
+MSG
+}
+
+main() {
+  ensure_not_root
+  ensure_macos
+  ensure_repo
+
+  log "Dotfiles directory: $DOTFILES_DIR"
+  log "Safe mode: no sudo, no package installs, no network by default"
+
+  ensure_base_dirs
+  link_shell_config
+  link_terminal_config
+  validate_tools
+  validate_starship
+  setup_tmux_plugins
+  print_next_steps
+}
+
+main "$@"

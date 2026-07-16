@@ -1,0 +1,45 @@
+[font]
+#size = 25
+size = 10.5
+
+[font.normal]
+#family = "UbuntuMono Nerd Font"
+#family = "JetBrains Mono"
+family = "FiraCode Nerd Font"
+style = "Regular"
+
+[font.bold]
+family = "FiraCode Nerd Font"
+style = "Bold"
+
+[font.italic]
+family = "FiraCode Nerd Font"
+style = "Italic"
+
+[window]
+#decorations = "none"
+
+[window.dimensions]
+columns = 100
+lines = 50
+
+[window.padding]
+x = 7
+y = 0
+
+[general]
+
+# themes from https://github.com/alacritty/alacritty-theme
+import = ["~/.config/alacritty/themes/themes/gruvbox_dark.toml"]
+
+[terminal]
+
+[terminal.shell]
+#program = "tmux"
+program = "/usr/bin/zsh"
+args = ["-l"] # The -l flag forces Zsh to launch as a login shell, loading my profiles cleanly.
+
+[scrolling]
+history = 10000
+multiplier = 3
+
